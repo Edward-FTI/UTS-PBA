@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import re
 import string
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.svm import SVC
 from sklearn.neighbors import KNeighborsClassifier
@@ -50,24 +50,47 @@ if uploaded_file is not None:
     X = vectorizer.fit_transform(data['clean_text'])
     st.write(f"TF-IDF matrix shape: {X.shape}")
 
-    # 5. Model Training
-    st.header("5. Model Training")
+    # 5. Model Training with Cross-validation
+    st.header("5. Model Training with Cross-validation")
     model_option = st.selectbox("Select Model", 
                               ['Support Vector Machine', 'K-Nearest Neighbors', 'Naive Bayes'])
     
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     
     if model_option == 'Support Vector Machine':
-        model = SVC(C=10, kernel='linear')
+        model_1 = SVC(C=10, kernel='linear')
+        model_2 = KNeighborsClassifier(n_neighbors=7, weights='uniform')
     elif model_option == 'K-Nearest Neighbors':
-        model = KNeighborsClassifier(n_neighbors=7, weights='uniform')
+        model_1 = KNeighborsClassifier(n_neighbors=7, weights='uniform')
+        model_2 = SVC(C=10, kernel='linear')
     else:  # Naive Bayes
-        model = MultinomialNB(alpha=0.1)
+        model_1 = MultinomialNB(alpha=0.1)
+        model_2 = SVC(C=10, kernel='linear')
     
-    model.fit(X_train, y_train)
+    # Cross-validation for model 1
+    st.subheader(f"Cross-validation for {model_option} 1")
+    cv_scores_1 = cross_val_score(model_1, X_train, y_train, cv=5, scoring='accuracy')
+    st.write(f"Cross-validation scores for Model 1: {cv_scores_1}")
+    st.write(f"Mean Accuracy: {cv_scores_1.mean():.2f}")
+
+    # Cross-validation for model 2
+    st.subheader(f"Cross-validation for {model_option} 2")
+    cv_scores_2 = cross_val_score(model_2, X_train, y_train, cv=5, scoring='accuracy')
+    st.write(f"Cross-validation scores for Model 2: {cv_scores_2}")
+    st.write(f"Mean Accuracy: {cv_scores_2.mean():.2f}")
+    
+    # Select the model with better cross-validation performance
+    if cv_scores_1.mean() > cv_scores_2.mean():
+        st.success(f"Model 1 (Accuracy: {cv_scores_1.mean():.2f}) is selected for final training")
+        final_model = model_1
+    else:
+        st.success(f"Model 2 (Accuracy: {cv_scores_2.mean():.2f}) is selected for final training")
+        final_model = model_2
+    
+    final_model.fit(X_train, y_train)
     
     # Evaluation
-    y_pred = model.predict(X_test)
+    y_pred = final_model.predict(X_test)
     acc = accuracy_score(y_test, y_pred)
     
     st.success(f"Model trained! Accuracy: {acc:.2f}")
@@ -81,11 +104,11 @@ if uploaded_file is not None:
     st.subheader("Confusion Matrix")
     fig, ax = plt.subplots(figsize=(6, 4))
     sns.heatmap(confusion_matrix(y_test, y_pred), annot=True, fmt='d', cmap='Blues', 
-                xticklabels=model.classes_, yticklabels=model.classes_, ax=ax)
+                xticklabels=final_model.classes_, yticklabels=final_model.classes_, ax=ax)
     st.pyplot(fig)
     
     # Save model and vectorizer
-    joblib.dump(model, "sentiment_model.pkl")
+    joblib.dump(final_model, "sentiment_model.pkl")
     joblib.dump(vectorizer, "tfidf_vectorizer.pkl")
 
     # 6. Prediction on New Text
