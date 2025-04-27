@@ -5,93 +5,113 @@ import re
 import string
 from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.svm import SVC
+from sklearn.neighbors import KNeighborsClassifier
 from sklearn.naive_bayes import MultinomialNB
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 import matplotlib.pyplot as plt
-from nltk.stem import PorterStemmer
+import seaborn as sns
+import joblib
 
-# Function to lowercase and stem
-stemmer = PorterStemmer()
-def uncapitalize(doc):
-    return doc.lower()
+st.title("Sentiment Analysis App - UTS Deployment")
 
-def normalize_document(doc):
-    doc = uncapitalize(doc)
-    doc = re.sub(r"[^a-zA-Z\s]", "", doc, re.I | re.A)
-    doc = doc.strip()
-    tokens = doc.split()
-    tokens = [stemmer.stem(word) for word in tokens]
-    return " ".join(tokens)
+# Text cleaning function
+def clean_text(text):
+    text = text.lower()
+    text = re.sub(r'\d+', '', text)
+    text = text.translate(str.maketrans('', '', string.punctuation))
+    text = text.strip()
+    return text
 
-# Streamlit App
-st.title('Multi-Aspect Text Classification with Naive Bayes')
-st.write("Upload a CSV file containing a 'sentence' column and one or more aspect columns.")
+# 1. Data Loading
+st.header("1. Load Dataset")
+uploaded_file = st.file_uploader("Upload CSV file", type=["csv"])
 
-# File uploader
-uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
 if uploaded_file is not None:
-    df = pd.read_csv(uploaded_file)
-    st.subheader('Raw Data Preview')
-    st.write(df.head())
+    data = pd.read_csv(uploaded_file, encoding='latin1')
+    st.write("Sample data:", data.head())
 
-    # Validate 'sentence' column
-    if 'sentence' not in df.columns:
-        st.error("CSV must contain a 'sentence' column.")
-        st.stop()
+    # 2. Text Preprocessing
+    st.header("2. Text Preprocessing")
+    data['clean_text'] = data['sentence'].apply(clean_text)
+    st.write("Sample cleaned text:", data[['sentence', 'clean_text']].head())
 
-    # Determine possible label columns (all except 'sentence')
-    label_cols = [col for col in df.columns if col != 'sentence']
-    if not label_cols:
-        st.error("No aspect columns found. CSV must have at least one label column besides 'sentence'.")
-        st.stop()
+    # 3. Target Column Selection
+    st.header("3. Select Target Column")
+    target_column = st.selectbox("Select Target Column", 
+                               options=['fuel', 'machine', 'others', 'part', 'price', 'service'],
+                               index=0)
+    
+    y = data[target_column]
+    
+    # 4. Feature Extraction (TF-IDF)
+    st.header("4. Feature Extraction")
+    vectorizer = TfidfVectorizer()
+    X = vectorizer.fit_transform(data['clean_text'])
+    st.write(f"TF-IDF matrix shape: {X.shape}")
 
-    # Let user select which column to use as label
-    selected_label = st.sidebar.selectbox("Select aspect column to classify (label)", label_cols)
-    st.write(f"**Using label column:** {selected_label}")
-    st.write(df[['sentence', selected_label]].head())
-
-    # Preprocessing
-    st.subheader('Preprocessing')
-    df['clean_sentence'] = df['sentence'].astype(str).apply(normalize_document)
-    st.write(df[['sentence', 'clean_sentence', selected_label]].head())
-
-    # Feature Extraction
-    tfidf = TfidfVectorizer()
-    X = tfidf.fit_transform(df['clean_sentence'])
-    y = df[selected_label]
-
-    # Train-test split
+    # 5. Model Training
+    st.header("5. Model Training")
+    model_option = st.selectbox("Select Model", 
+                              ['Support Vector Machine', 'K-Nearest Neighbors', 'Naive Bayes'])
+    
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    st.write(f"Train size: {X_train.shape[0]}, Test size: {X_test.shape[0]}")
-
-    # Model training
-    model = MultinomialNB()
+    
+    if model_option == 'Support Vector Machine':
+        model = SVC(C=10, kernel='linear')
+    elif model_option == 'K-Nearest Neighbors':
+        model = KNeighborsClassifier(n_neighbors=7, weights='uniform')
+    else:  # Naive Bayes
+        model = MultinomialNB(alpha=0.1)
+    
     model.fit(X_train, y_train)
-
+    
     # Evaluation
     y_pred = model.predict(X_test)
     acc = accuracy_score(y_test, y_pred)
-    st.write(f"**Accuracy:** {acc:.2f}")
-
-    st.subheader('Classification Report')
+    
+    st.success(f"Model trained! Accuracy: {acc:.2f}")
+    
+    # Show classification report
+    st.subheader("Classification Report")
     report = classification_report(y_test, y_pred, output_dict=True)
-    st.write(pd.DataFrame(report).transpose())
-
-    st.subheader('Confusion Matrix')
-    cm = confusion_matrix(y_test, y_pred)
-    fig, ax = plt.subplots()
-    ax.matshow(cm)
-    for (i, j), v in np.ndenumerate(cm):
-        ax.text(j, i, str(v), ha='center', va='center')
+    st.table(pd.DataFrame(report).transpose())
+    
+    # Show confusion matrix
+    st.subheader("Confusion Matrix")
+    fig, ax = plt.subplots(figsize=(6, 4))
+    sns.heatmap(confusion_matrix(y_test, y_pred), annot=True, fmt='d', cmap='Blues', 
+                xticklabels=model.classes_, yticklabels=model.classes_, ax=ax)
     st.pyplot(fig)
+    
+    # Save model and vectorizer
+    joblib.dump(model, "sentiment_model.pkl")
+    joblib.dump(vectorizer, "tfidf_vectorizer.pkl")
 
-    # Predict new sentence
-    st.subheader('Predict New Sentence')
-    user_input = st.text_input('Enter a sentence to classify')
-    if st.button('Predict') and user_input:
-        clean_input = normalize_document(user_input)
-        vect_input = tfidf.transform([clean_input])
-        pred = model.predict(vect_input)[0]
-        st.write(f'**Predicted {selected_label}:** {pred}')
-else:
-    st.info('Awaiting CSV file to be uploaded.')
+    # 6. Prediction on New Text
+    st.header("6. Predict New Text")
+    new_text = st.text_area("Enter text to analyze sentiment:")
+    
+    if st.button("Predict"):
+        # Load model and vectorizer
+        loaded_model = joblib.load("sentiment_model.pkl")
+        loaded_vectorizer = joblib.load("tfidf_vectorizer.pkl")
+        
+        # Clean and vectorize the new text
+        cleaned_text = clean_text(new_text)
+        text_vector = loaded_vectorizer.transform([cleaned_text])
+        
+        # Make prediction
+        pred = loaded_model.predict(text_vector)
+        pred_proba = loaded_model.predict_proba(text_vector)
+        
+        # Display results
+        st.success(f"Predicted sentiment: {pred[0]}")
+        
+        # Show prediction probabilities
+        st.subheader("Prediction Probabilities")
+        proba_df = pd.DataFrame({
+            'Class': loaded_model.classes_,
+            'Probability': pred_proba[0]
+        })
+        st.bar_chart(proba_df.set_index('Class'))
